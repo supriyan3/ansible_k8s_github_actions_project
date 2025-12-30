@@ -1,118 +1,146 @@
-name: CI/CD Pipeline
+name: CI-CD Pipeline with Ansible
 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+
 permissions:
   contents: write
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: devopshubg333/k8s_ansible
+
+# =====================================================
+# CI JOB
+# =====================================================
 jobs:
-  build:
+  ci:
+    name: CI - Build, Scan, Image, GitOps
     runs-on: ubuntu-latest
-    
-    env:
-      REGISTRY: docker.io
-      IMAGE_NAME: devopshubg333/k8s_ansible
 
     steps:
-      # === Checkout Code ===
+      # -------------------------------
+      # Checkout Source Code
+      # -------------------------------
       - name: Checkout Code
         uses: actions/checkout@v4
 
-     #  # === Build Jar ===
-     #  - name: Set up JDK 17
-     #    uses: actions/setup-java@v4
-     #    with:
-     #      java-version: '17'
-     #      distribution: 'temurin'
-     # ===Build Artifactory===
-      - name: Build JAR
+      # -------------------------------
+      # Build Java Application
+      # -------------------------------
+      - name: Build Application
         run: |
           cd Application
           mvn clean package -DskipTests
 
-      # === SonarQube Scan ===
+      # -------------------------------
+      # SonarQube Code Scan
+      # -------------------------------
       - name: SonarQube Scan
         run: |
           cd Application
-          mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+          mvn verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
             -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
             -Dsonar.login=${{ secrets.SONAR_TOKEN }}
 
-     # === Build Docker Image ===
-      - name: Log in to DockerHub
-        uses: docker/login-action@v2
+      # -------------------------------
+      # Docker Login
+      # -------------------------------
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build Docker Image
-        run: |
-          cd Application
-          docker build -t $REGISTRY/$IMAGE_NAME:${{ github.run_number }} .
-
-      # # # === Docker Image Scan ===
-      # - name: Scan Docker Image with Trivy
-      #   uses: aquasecurity/trivy-action@0.20.0
-      #   with:
-      #     image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
-      #     severity: CRITICAL,HIGH
-      #     ignore-unfixed: true
-
-      # === Push Docker Image ===
-      - name: Push Docker Image
-        run: |
-          docker push $REGISTRY/$IMAGE_NAME:${{ github.run_number }}
-
-      # === Update Kubernetes Deployment manifest ===
-      
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      # -------------------------------
+      # Build & Push Docker Image
+      # -------------------------------
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-          
-      - name: Checkout full history
-        uses: actions/checkout@v3
+          context: ./Application
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
+
+      # -------------------------------
+      # Trivy Image Scan (Security Gate)
+      # -------------------------------
+      - name: Scan Docker Image with Trivy
+        uses: aquasecurity/trivy-action@0.20.0
         with:
-           fetch-depth: 0  
-      
-      # - name: Checkout
-      #   uses: actions/checkout@v3
-        # with:
-        #   token: ${{ secrets.MY_GITHUB_TOKEN }}
-                  
-      - name: Update K8s Deployment YAML
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: 1
+
+      # -------------------------------
+      # Checkout Full Git History
+      # -------------------------------
+      - name: Checkout Full History
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # -------------------------------
+      # Update Kubernetes Manifest (GitOps)
+      # -------------------------------
+      - name: Update Kubernetes Deployment YAML
         run: |
-          git config user.name "jadalaramani"
-          git config user.email "jadalaramani@gmail.com"
-          
-          git pull origin main --rebase
-          
-          sed -i "s|k8s_ansible:.*|k8s_ansible:${{ github.run_number }}|g" Ansible/k8s_deployment.yaml
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          sed -i "s|k8s_ansible:.*|k8s_ansible:${{ github.run_number }}|g" \
+            Ansible/k8s_deployment.yaml
 
           git add Ansible/k8s_deployment.yaml
-          git commit -m "Update deployment image tag to version ${{ github.run_number }} [skip ci]"
-          git push
+          git commit -m "Update image tag to ${{ github.run_number }} [skip ci]"
+          git push origin main
 
-      # === Deploy to K8s using Ansible ===
-      - name: Set up Ansible
+# =====================================================
+# CD JOB
+# =====================================================
+  cd:
+    name: CD - Deploy to Kubernetes using Ansible
+    runs-on: ubuntu-latest
+    needs: ci
+
+    steps:
+      # -------------------------------
+      # Checkout Repo
+      # -------------------------------
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # -------------------------------
+      # Install Ansible & Dependencies
+      # -------------------------------
+      - name: Install Ansible
         run: |
-          sudo apt-get update && sudo apt-get install -y ansible
-          python -m pip install --upgrade pip
-          pip install ansible kubernetes 
-          
+          sudo apt-get update
+          sudo apt-get install -y ansible
+          pip install kubernetes
+
+      # -------------------------------
+      # Configure Kubernetes Access
+      # -------------------------------
       - name: Configure kubeconfig
         run: |
-          mkdir -p $HOME/.kube 
+          mkdir -p $HOME/.kube
           echo "${{ secrets.KUBECONFIG_DATA }}" | base64 -d > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
 
-      - name: Check cluster access
+      # -------------------------------
+      # Validate Cluster Connectivity
+      # -------------------------------
+      - name: Verify Cluster Access
         run: kubectl get nodes
 
-      - name: Run Ansible Playbook
+      # -------------------------------
+      # Deploy Using Ansible
+      # -------------------------------
+      - name: Deploy Application with Ansible
         run: |
           ansible-playbook Ansible/ansible_k8s_deploy_playbook.yaml
