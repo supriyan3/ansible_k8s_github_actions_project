@@ -13,7 +13,7 @@ jobs:
     
     env:
       REGISTRY: docker.io
-      IMAGE_NAME: devopshubg333/k8s_ansible
+      IMAGE_NAME: snagineni03/k8s_ansible
 
     steps:
       # === Checkout Code ===
@@ -33,12 +33,12 @@ jobs:
           mvn clean package -DskipTests
 
       # === SonarQube Scan ===
-      - name: SonarQube Scan
-        run: |
-          cd Application
-          mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
-            -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+      # - name: SonarQube Scan
+      #   run: |
+      #     cd Application
+      #     mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar \
+      #       -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }} \
+      #       -Dsonar.login=${{ secrets.SONAR_TOKEN }}
 
      # === Build Docker Image ===
       - name: Log in to DockerHub
