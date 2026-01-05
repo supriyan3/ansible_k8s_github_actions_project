@@ -86,8 +86,8 @@ jobs:
                   
       - name: Update K8s Deployment YAML
         run: |
-          git config user.name "jadalaramani"
-          git config user.email "jadalaramani@gmail.com"
+          git config user.name "githubactions"
+          git config user.email "actions@github.com"
           
           git pull origin main --rebase
           
